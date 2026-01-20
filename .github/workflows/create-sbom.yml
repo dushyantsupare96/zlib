@@ -1,0 +1,63 @@
+name: Generate SBOM and Legal Notices
+
+on: push
+
+jobs:
+  sbom:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin
+        # Syft can output CycloneDX JSON directly.
+        # https://github.com/anchore/syft [web:34][web:21]
+
+      - name: Generate CycloneDX SBOM (JSON)
+        run: |
+          syft dir:. -o cyclonedx-json=sbom.json
+        # -o cyclonedx-json produces CycloneDX 1.4/1.6 JSON SBOM.
+        # https://github.com/anchore/syft/wiki/format-conversion [web:35][web:21]
+
+      - name: Generate LEGAL_NOTICES.txt from SBOM
+        run: |
+          # Install jq for JSON processing
+          sudo apt-get update -y
+          sudo apt-get install -y jq
+
+          # Basic legal notices file derived from CycloneDX components
+          {
+            echo "LEGAL NOTICES"
+            echo "=============="
+            echo
+            echo "This file lists third-party components detected in this build and their licenses."
+            echo "Source: sbom.json (CycloneDX)"
+            echo
+
+            # For each component with a license, output a line:
+            # <name> <version> - <license-id or name>
+            jq -r '
+              .components[]? as $c
+              | $c.licenses[]? as $l
+              | "\($c.name // "UNKNOWN") \($c.version // "UNKNOWN") - \($l.license.id // $l.license.name // "UNKNOWN LICENSE")"
+            ' sbom.json \
+            | sort -u
+          } > LEGAL_NOTICES.txt
+        # Syft SBOMs include license info for components when available,
+        # which can be extracted with jq. [web:30][web:33][web:38]
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SBOM-JSON
+          path: sbom.json
+
+      - name: Upload Legal Notices artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LEGAL-NOTICES
+          path: LEGAL_NOTICES.txt
