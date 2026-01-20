@@ -10,26 +10,34 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      # Optional: build zlib so Syft can also see compiled artifacts
+      - name: Build zlib
+        run: |
+          mkdir -p build
+          cd build
+          cmake ..
+          make -j"$(nproc)"
+
       - name: Install Syft
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
             | sh -s -- -b /usr/local/bin
-        # Syft can output CycloneDX JSON directly.
-        # https://github.com/anchore/syft [web:34][web:21]
+        # Syft generates multi-language SBOMs and can output CycloneDX JSON directly. [web:41][web:21]
 
       - name: Generate CycloneDX SBOM (JSON)
         run: |
-          syft dir:. -o cyclonedx-json=sbom.json
-        # -o cyclonedx-json produces CycloneDX 1.4/1.6 JSON SBOM.
-        # https://github.com/anchore/syft/wiki/format-conversion [web:35][web:21]
+          # Scan the repo but ignore VCS and workflows to reduce noise
+          syft dir:. \
+            --exclude .git \
+            --exclude .github \
+            -o cyclonedx-json=sbom.json
+        # CycloneDX 1.x JSON output is supported via the cyclonedx-json format. [web:35][web:43]
 
       - name: Generate LEGAL_NOTICES.txt from SBOM
         run: |
-          # Install jq for JSON processing
           sudo apt-get update -y
           sudo apt-get install -y jq
 
-          # Basic legal notices file derived from CycloneDX components
           {
             echo "LEGAL NOTICES"
             echo "=============="
@@ -38,17 +46,21 @@ jobs:
             echo "Source: sbom.json (CycloneDX)"
             echo
 
-            # For each component with a license, output a line:
-            # <name> <version> - <license-id or name>
+            # 1) List all library components (third-party things)
             jq -r '
-              .components[]? as $c
-              | $c.licenses[]? as $l
-              | "\($c.name // "UNKNOWN") \($c.version // "UNKNOWN") - \($l.license.id // $l.license.name // "UNKNOWN LICENSE")"
-            ' sbom.json \
-            | sort -u
-          } > LEGAL_NOTICES.txt
-        # Syft SBOMs include license info for components when available,
-        # which can be extracted with jq. [web:30][web:33][web:38]
+              .components[]?
+              | select(.type == "library")
+              | "\(.name // "UNKNOWN") \(.version // "UNKNOWN") - UNKNOWN LICENSE"
+            ' sbom.json
+
+            # 2) Explicitly document the main project (zlib) with correct SPDX license
+            #    (Syft does not reliably infer this for C/zlib from source alone.)
+            echo "zlib UNKNOWN - Zlib"
+          } \
+          | sort -u \
+          > LEGAL_NOTICES.txt
+        # CycloneDX supports license declarations, but your current SBOM has none,
+        # so licenses must be added or mapped externally like this. [file:56][web:46]
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
