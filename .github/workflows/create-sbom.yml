@@ -10,7 +10,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      # Optional: build zlib so Syft can also see compiled artifacts
+      # Optional build (kept, but you can remove if not needed)
       - name: Build zlib
         run: |
           mkdir -p build
@@ -22,16 +22,16 @@ jobs:
         run: |
           curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
             | sh -s -- -b /usr/local/bin
-        # Syft generates multi-language SBOMs and can output CycloneDX JSON directly. [web:41][web:21]
+        # Syft supports CycloneDX JSON output for directory scans. [web:41][web:35]
 
       - name: Generate CycloneDX SBOM (JSON)
         run: |
-          # Scan the repo but ignore VCS and workflows to reduce noise
+          # Valid exclude patterns for directory scans must start with ./, */, or **/
           syft dir:. \
-            --exclude .git \
-            --exclude .github \
+            --exclude='./.git/**' \
+            --exclude='./.github/**' \
             -o cyclonedx-json=sbom.json
-        # CycloneDX 1.x JSON output is supported via the cyclonedx-json format. [web:35][web:43]
+        # For directory sources, exclude globs must be relative like './.git/**'. [web:57][web:61]
 
       - name: Generate LEGAL_NOTICES.txt from SBOM
         run: |
@@ -46,21 +46,20 @@ jobs:
             echo "Source: sbom.json (CycloneDX)"
             echo
 
-            # 1) List all library components (third-party things)
+            # 1) List all library components from the SBOM, even if no license field exists
             jq -r '
               .components[]?
               | select(.type == "library")
               | "\(.name // "UNKNOWN") \(.version // "UNKNOWN") - UNKNOWN LICENSE"
             ' sbom.json
 
-            # 2) Explicitly document the main project (zlib) with correct SPDX license
-            #    (Syft does not reliably infer this for C/zlib from source alone.)
+            # 2) Explicit entry for the main project (zlib) with its SPDX license
             echo "zlib UNKNOWN - Zlib"
           } \
           | sort -u \
           > LEGAL_NOTICES.txt
-        # CycloneDX supports license declarations, but your current SBOM has none,
-        # so licenses must be added or mapped externally like this. [file:56][web:46]
+        # CycloneDX has a licenses field, but Syft directory scans often lack it for C code,
+        # so licenses are added explicitly here. [file:56][web:46]
 
       - name: Upload SBOM artifact
         uses: actions/upload-artifact@v4
